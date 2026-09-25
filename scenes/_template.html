@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Untitled Riso</title>
+</head>
+<body>
+<script src="../riso/riso.js"></script>
+<script>
+// Copy this file to scenes/<your-scene>.html and replace the scene body.
+// See CLAUDE.md for the rules of the medium.
+const LOOP = 10;                                   // seconds; keep motion periodic in LOOP
+const { tone, lerp, clamp, smoothstep, hash, loopNoise, blob, ridge, wobblyPoly, wobblyRect, knockout, noise } = Riso;
+const TAU = Math.PI * 2;
+const cyc = (t, n = 1) => (TAU * n * t) / LOOP;    // phase that completes n cycles per loop
+
+Riso.mount((riso) => {
+  const W = riso.width, H = riso.height;
+  const M = 32, X0 = M, Y0 = M, X1 = W - M, Y1 = H - M;   // printed area (paper margin around it)
+
+  return (ink, t) => {
+    // one 2D context per ink plate; draw in black (tone(d) = d% tint), '#fff' erases
+    const A = ink.fluorescentPink, B = ink.blue;
+    const ALL = ink.all;
+
+    ALL.forEach((c) => { c.save(); c.beginPath(); c.rect(X0, Y0, X1 - X0, Y1 - Y0); c.clip(); });
+
+    // background tint
+    B.fillStyle = tone(0.25); B.fillRect(X0, Y0, X1 - X0, Y1 - Y0);
+
+    // a bobbing blob: pink over blue overprints to purple
+    const y = H / 2 + Math.sin(cyc(t)) * 40;
+    A.fillStyle = tone(1); blob(A, W / 2, y, 90, { seed: 1, t: t * 0.5 }); A.fill();
+    knockout([B], (c) => c.arc(W / 2 + 30, y - 20, 22, 0, TAU));   // highlight = bare paper
+
+    ALL.forEach((c) => c.restore());
+  };
+}, {
+  title: 'untitled',
+  width: 800, height: 800,
+  inks: ['fluorescentPink', 'blue'],   // names from Riso.INKS, or { name, color: '#hex', screen, cell, angle }
+  paper: 'cream',                       // Riso.PAPERS key or '#hex'
+  fps: 24, boil: 8, misregister: 3,
+  loop: LOOP,
+  seed: 1,
+});
+</script>
+</body>
+</html>

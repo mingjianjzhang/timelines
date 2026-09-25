@@ -1,0 +1,368 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Night &amp; Day Express</title>
+</head>
+<body>
+<script src="../riso/riso.js"></script>
+<script>
+/*
+ * A train journey through a full day, printed in three riso inks.
+ * Seamless 48-second loop: every scrolling layer uses loopNoise / whole-number
+ * object counts so the last frame flows back into the first.
+ */
+const LOOP = 48;
+const { tone, lerp, clamp, smoothstep, hash, loopNoise, blob, ridge, wobblyRect, wobblyPoly, knockout, noise } = Riso;
+const TAU = Math.PI * 2;
+const cyc = (t, n = 1) => (TAU * Math.round(n) * t) / LOOP;   // phase: n whole cycles per LOOP
+
+Riso.mount((riso) => {
+  const W = riso.width, H = riso.height;
+  const X0 = 28, Y0 = 28, X1 = W - 28, Y1 = H - 84;    // printed image area
+  const HORIZON = 300, RAIL = 440;
+
+  // scroll helper: calls fn(screenX, index) for N evenly spaced objects on a layer
+  function scatter(speed, spacing, t, margin, fn) {
+    const Lw = speed * LOOP;
+    const N = Math.max(1, Math.round(Lw / spacing));
+    const sp = Lw / N;
+    const s = (speed * t) % Lw;
+    for (let i = 0; i < N; i++) {
+      let x = i * sp - s;
+      while (x < X0 - margin) x += Lw;
+      if (x > X1 + margin) continue;
+      fn(x, i, sp);
+    }
+  }
+
+  // layer height profile that loops seamlessly for a given scroll speed
+  const profile = (speed, t, wavelength, seed, oct = 3) => (x) =>
+    loopNoise(x + speed * t, speed * LOOP, wavelength, { seed, octaves: oct });
+
+  const shape = (ctxs, draw) => ctxs.forEach(([c, d]) => { if (d > 0.003) { c.fillStyle = tone(d); draw(c); c.fill(); } });
+
+  return (ink, t) => {
+    const B = ink.blue, P = ink.fluorescentPink, Y = ink.yellow;
+    const ALL = ink.all;
+
+    // ---- time of day -----------------------------------------------------
+    const p = (t / LOOP) % 1;                    // 0 dawn, .25 noon, .5 dusk, .75 midnight
+    const sunY = Math.sin(TAU * p);
+    const day = smoothstep(-0.1, 0.45, sunY);
+    const night = 1 - smoothstep(-0.45, 0.02, sunY);
+    const dusk = Math.exp(-Math.pow(sunY / 0.3, 2));
+    // night shading: pull yellow out, push blue in
+    const nY = (d) => d * (1 - 0.65 * night);
+    const nB = (d) => clamp(d + 0.32 * night * (1 - d));
+
+    ALL.forEach((c) => { c.save(); c.beginPath(); c.rect(X0, Y0, X1 - X0, Y1 - Y0); c.clip(); });
+
+    // ---- sky ---------------------------------------------------------------
+    const grad = (c, top, bot) => {
+      const g = c.createLinearGradient(0, Y0, 0, HORIZON + 30);
+      g.addColorStop(0, tone(top)); g.addColorStop(1, tone(bot));
+      c.fillStyle = g; c.fillRect(X0, Y0, X1 - X0, HORIZON + 30 - Y0);
+    };
+    grad(B, lerp(0.38, 0.95, night) * (1 - dusk * 0.45), lerp(0.06, 0.62, night) * (1 - dusk * 0.8));
+    grad(P, dusk * 0.28 + night * 0.08, dusk * 0.9 + day * 0.1 + night * 0.14);
+    grad(Y, day * 0.05, dusk * 0.75 + day * 0.28);
+
+    // ---- stars ---------------------------------------------------------------
+    if (night > 0.01) {
+      for (let i = 0; i < 90; i++) {
+        const sx = X0 + hash(i, 1) * (X1 - X0), sy = Y0 + hash(i, 2) * (HORIZON - Y0 - 40);
+        const tw = 0.6 + 0.4 * Math.sin(cyc(t, 16 + hash(i, 3) * 30) + i);
+        const r = 1.2 + hash(i, 4) * 2;
+        [B, P].forEach((c) => { c.fillStyle = `rgba(255,255,255,${night * tw})`; c.beginPath(); c.arc(sx, sy, r, 0, TAU); c.fill(); });
+      }
+    }
+
+    // ---- sun & moon ----------------------------------------------------------
+    const arcX = (ph) => W / 2 - Math.cos(TAU * ph) * W * 0.42;
+    if (sunY > -0.2) {
+      const sx = arcX(p), sy = HORIZON - sunY * 230;
+      const r = 46 + dusk * 12;
+      [B, P].forEach((c) => { c.fillStyle = '#fff'; blob(c, sx, sy, r, { wobble: 0.03, seed: 2 }); c.fill(); });
+      Y.fillStyle = tone(1); blob(Y, sx, sy, r, { wobble: 0.03, seed: 2 }); Y.fill();
+      P.fillStyle = tone(0.15 + dusk * 0.75); blob(P, sx, sy, r, { wobble: 0.03, seed: 2 }); P.fill();
+      // halo rings
+      for (let k = 1; k <= 3; k++) {
+        Y.strokeStyle = tone(0.25 * (day + dusk) / k); Y.lineWidth = 3;
+        blob(Y, sx, sy, r + k * 16 + Math.sin(cyc(t, 15) + k) * 2, { wobble: 0.02, seed: k }); Y.stroke();
+      }
+    }
+    if (sunY < 0.2) {
+      const mx = arcX(p + 0.5), my = HORIZON + sunY * 230;
+      [B, P].forEach((c) => { c.fillStyle = '#fff'; blob(c, mx, my, 30, { wobble: 0.02, seed: 5 }); c.fill(); });
+      Y.fillStyle = tone(0.22); blob(Y, mx, my, 30, { seed: 5 }); Y.fill();
+      B.fillStyle = tone(0.28);
+      [[-8, -6, 7], [9, 4, 5], [-2, 11, 4], [10, -10, 3]].forEach(([dx, dy, r]) => { blob(B, mx + dx, my + dy, r, { seed: dx }); B.fill(); });
+    }
+
+    // ---- far mountains -------------------------------------------------------
+    {
+      const f = profile(20, t, 160, 1, 4);
+      const draw = (c) => ridge(c, (x) => HORIZON - 60 - 95 * (0.5 + 0.5 * f(x)) - 25 * Math.abs(loopNoise(x + 20 * t, 20 * LOOP, 40, { seed: 9 })), { x0: X0, x1: X1, bottom: HORIZON + 40 });
+      shape([[B, nB(0.3)], [P, 0.1 + dusk * 0.3]], draw);
+    }
+    // ---- near mountains ------------------------------------------------------
+    {
+      const f = profile(36, t, 120, 2, 4);
+      const draw = (c) => ridge(c, (x) => HORIZON - 25 - 70 * (0.5 + 0.5 * f(x)), { x0: X0, x1: X1, bottom: HORIZON + 60 });
+      shape([[B, nB(0.58)], [P, 0.12 + dusk * 0.25], [Y, nY(0.08)]], draw);
+    }
+
+    // ---- rolling hills with trees -----------------------------------------------
+    {
+      const v = 70, f = profile(v, t, 150, 3, 3);
+      const hy = (x) => HORIZON + 22 - 38 * (0.5 + 0.5 * f(x));
+      const draw = (c) => ridge(c, hy, { x0: X0, x1: X1, bottom: RAIL });
+      shape([[P, 0.5], [B, nB(0.22)], [Y, nY(0.3)]], draw);
+      scatter(v, 26, t, 30, (x, i) => {
+        if (hash(i, 7) < 0.45) return;
+        const y = hy(x) + 4, h = 18 + hash(i, 8) * 22, w = h * 0.42;
+        B.fillStyle = tone(nB(0.85));
+        if (hash(i, 9) < 0.6) wobblyPoly(B, [[x, y - h], [x + w, y], [x - w, y]], { amp: 0.8, seed: i });
+        else blob(B, x, y - h * 0.45, h * 0.45, { seed: i, wobble: 0.15 });
+        B.fill();
+        Y.fillStyle = tone(nY(0.35)); blob(Y, x - 3, y - h * 0.5, h * 0.22, { seed: i + 3 }); Y.fill();
+      });
+    }
+
+    // ---- fields -------------------------------------------------------------------
+    {
+      const v = 160, f = profile(v, t, 260, 4, 2);
+      const fy = (x) => HORIZON + 48 - 10 * f(x);
+      const draw = (c) => ridge(c, fy, { x0: X0, x1: X1, bottom: RAIL + 10 });
+      shape([[Y, nY(0.8)], [B, nB(0.16)], [P, 0.05 + dusk * 0.2]], draw);
+      // crop rows
+      B.strokeStyle = tone(nB(0.22)); B.lineWidth = 2;
+      for (let y = HORIZON + 58, k = 0; y < RAIL; y += 6 + k * 1.5, k++) {
+        B.beginPath(); B.moveTo(X0, y); B.lineTo(X1, y); B.stroke();
+      }
+      // hedgerows + farmhouses
+      scatter(v, 300, t, 120, (x, i) => {
+        const y0 = fy(x);
+        B.fillStyle = tone(nB(0.8));
+        blob(B, x, y0 + 4, 10, { seed: i }); B.fill();
+        B.beginPath(); B.moveTo(x - 4, y0 + 6); B.lineTo(x - 70, RAIL + 10); B.lineTo(x - 50, RAIL + 10); B.lineTo(x + 3, y0 + 6); B.fill();
+        if (hash(i, 11) > 0.5) {
+          const hx = x + 60 + hash(i, 12) * 60, hyy = y0 + 22;
+          [[B, nB(0.15)], [Y, nY(0.3)]].forEach(([c, d]) => { c.fillStyle = tone(d); wobblyRect(c, hx, hyy, 34, 20, { amp: 0.6, seed: i }); c.fill(); });
+          P.fillStyle = tone(0.95); wobblyPoly(P, [[hx - 4, hyy], [hx + 17, hyy - 14], [hx + 38, hyy]], { amp: 0.5, seed: i }); P.fill();
+          // window: dark by day, glowing by night
+          B.fillStyle = night > 0.5 ? '#fff' : tone(0.8); B.fillRect(hx + 14, hyy + 6, 7, 7);
+          Y.fillStyle = tone(night > 0.5 ? 1 : 0); Y.fillRect(hx + 14, hyy + 6, 7, 7);
+        }
+      });
+    }
+
+    // ---- birds ------------------------------------------------------------------
+    if (day > 0.05) {
+      B.strokeStyle = tone(0.9 * day); B.lineWidth = 1.6; B.lineCap = 'round';
+      for (let i = 0; i < 7; i++) {
+        const u = ((t / LOOP) * 2 + 0.35) % 1;
+        const bx = lerp(X1 + 60, X0 - 60, u) + (i % 2 ? 1 : -1) * Math.ceil(i / 2) * 16;
+        const by = 120 + Math.ceil(i / 2) * 9 + Math.sin(cyc(t, 23) + i) * 3;
+        const flap = Math.sin(cyc(t, 107) + i * 1.7) * 5;
+        B.beginPath(); B.moveTo(bx - 7, by - flap); B.quadraticCurveTo(bx - 3, by - 2, bx, by + 1); B.quadraticCurveTo(bx + 3, by - 2, bx + 7, by - flap); B.stroke();
+      }
+    }
+
+    // ---- telegraph poles & wires ------------------------------------------------------
+    scatter(420, 360, t, 400, (x) => {
+      B.fillStyle = tone(nB(0.95));
+      wobblyRect(B, x - 3, 242, 6, RAIL - 250, { amp: 0.6, seed: x * 0.01 }); B.fill();
+      B.fillRect(x - 18, 254, 36, 4);
+      B.strokeStyle = tone(nB(0.9)); B.lineWidth = 2;
+      for (const wy of [256, 266]) {
+        B.beginPath(); B.moveTo(x - 360, wy); B.quadraticCurveTo(x - 180, wy + 34, x, wy); B.stroke();
+      }
+    });
+
+    // ---- track bed --------------------------------------------------------------------
+    [[P, 0.32], [Y, nY(0.45)], [B, nB(0.12)]].forEach(([c, d]) => { c.fillStyle = tone(d); c.fillRect(X0, RAIL - 2, X1 - X0, Y1 - RAIL + 2); });
+    scatter(600, 26, t, 20, (x) => { B.fillStyle = tone(nB(0.7)); wobblyRect(B, x, RAIL + 1, 14, 8, { amp: 0.5, seed: x }); B.fill(); });
+    B.fillStyle = tone(1); B.fillRect(X0, RAIL - 2, X1 - X0, 3);
+    B.fillStyle = tone(0.5); B.fillRect(X0, RAIL + 9, X1 - X0, 2);
+
+    // ---- the train ----------------------------------------------------------------------
+    const bob = (k) => Math.round(Math.sin(cyc(t, 84) + k * 1.9) * 0.8 + (hash(Math.floor((t / LOOP) * 1108) % 1108 + k, 5) > 0.93 ? 1 : 0));
+    const wheel = (x, y, r, spokes) => {
+      const ang = cyc(t, (600 * LOOP) / (TAU * r));   // rolls at track speed, loops cleanly
+      B.fillStyle = tone(1); B.beginPath(); B.arc(x, y, r, 0, TAU); B.fill();
+      B.fillStyle = '#fff'; B.beginPath(); B.arc(x, y, r - 3.5, 0, TAU); B.fill();
+      B.strokeStyle = tone(1); B.lineWidth = 2;
+      for (let s = 0; s < spokes; s++) {
+        const a = ang + (s / spokes) * TAU;
+        B.beginPath(); B.moveTo(x, y); B.lineTo(x + Math.cos(a) * (r - 3), y + Math.sin(a) * (r - 3)); B.stroke();
+      }
+      Y.fillStyle = tone(0.9); Y.beginPath(); Y.arc(x, y, 3, 0, TAU); Y.fill();
+      return ang;
+    };
+
+    // carriages
+    const carW = 150, carGap = 12;
+    for (let k = 0; k < 3; k++) {
+      const x = 170 + k * (carW + carGap), dy = bob(k);
+      const top = RAIL - 88 + dy, bot = RAIL - 20 + dy;
+      knockout(ALL, (c) => c.rect(x, top + 4, carW, bot - top - 4));
+      // coupling
+      B.fillStyle = tone(1); B.fillRect(x + carW - 2, bot - 8, carGap + 4, 3);
+      // roof
+      [[P, 0.8], [B, 0.75]].forEach(([c, d]) => {
+        c.fillStyle = tone(d); c.beginPath();
+        c.moveTo(x - 4, top + 8); c.quadraticCurveTo(x + carW / 2, top - 10, x + carW + 4, top + 8); c.closePath(); c.fill();
+      });
+      // body
+      B.fillStyle = tone(0.95); wobblyRect(B, x, top + 8, carW, bot - top - 8, { amp: 0.5, seed: k }); B.fill();
+      P.fillStyle = tone(1); P.fillRect(x, bot - 14, carW, 6);
+      // windows
+      for (let w = 0; w < 5; w++) {
+        const wx = x + 12 + w * 27, wy = top + 18;
+        B.fillStyle = '#fff'; B.fillRect(wx, wy, 18, 22);
+        P.fillStyle = '#fff'; P.fillRect(wx, wy, 18, 22);
+        Y.fillStyle = tone(lerp(0.12, 1, night)); Y.fillRect(wx, wy, 18, 22);
+        // passenger silhouettes
+        if (hash(k * 5 + w, 3) > 0.35) {
+          B.fillStyle = tone(0.55 + 0.35 * night);
+          blob(B, wx + 9, wy + 11, 4, { seed: k * 5 + w }); B.fill();
+          B.fillRect(wx + 3, wy + 15, 12, 7);
+        }
+        // light spill on the trackbed at night
+        if (night > 0.02) {
+          Y.fillStyle = tone(0.55 * night);
+          Y.beginPath(); Y.moveTo(wx - 2, RAIL + 12); Y.lineTo(wx + 20, RAIL + 12); Y.lineTo(wx + 34, Y1); Y.lineTo(wx - 16, Y1); Y.fill();
+        }
+      }
+      wheel(x + 24, RAIL - 11, 11, 4); wheel(x + 50, RAIL - 11, 11, 4);
+      wheel(x + carW - 50, RAIL - 11, 11, 4); wheel(x + carW - 24, RAIL - 11, 11, 4);
+    }
+
+    // locomotive
+    {
+      const dy = bob(4);
+      const lx = 660;
+      knockout(ALL, (c) => {
+        c.rect(lx, RAIL - 74 + dy, 60, 52);          // tender
+        c.rect(lx + 64, RAIL - 104 + dy, 58, 82);    // cab
+        c.rect(lx + 122, RAIL - 76 + dy, 136, 46);   // boiler + smokebox
+      });
+      // tender
+      B.fillStyle = tone(nB(0.85)); wobblyRect(B, lx, RAIL - 74 + dy, 60, 52, { amp: 0.5, seed: 40 }); B.fill();
+      B.fillStyle = tone(1);
+      blob(B, lx + 18, RAIL - 76 + dy, 12, { seed: 41, wobble: 0.3 }); B.fill();
+      blob(B, lx + 40, RAIL - 78 + dy, 13, { seed: 42, wobble: 0.3 }); B.fill();
+      P.fillStyle = tone(1); P.fillRect(lx, RAIL - 36 + dy, 60, 5);
+      // cab
+      P.fillStyle = tone(1); wobblyRect(P, lx + 64, RAIL - 104 + dy, 58, 82, { amp: 0.6, seed: 43 }); P.fill();
+      B.fillStyle = tone(1); B.fillRect(lx + 58, RAIL - 110 + dy, 70, 8);
+      [B, P].forEach((c) => { c.fillStyle = '#fff'; c.fillRect(lx + 78, RAIL - 94 + dy, 28, 24); });
+      Y.fillStyle = tone(lerp(0.3, 1, night)); Y.fillRect(lx + 78, RAIL - 94 + dy, 28, 24);
+      // boiler
+      P.fillStyle = tone(1);
+      P.beginPath(); P.roundRect(lx + 120, RAIL - 76 + dy, 124, 46, 20); P.fill();
+      B.fillStyle = tone(0.25); B.fillRect(lx + 120, RAIL - 44 + dy, 124, 14);
+      Y.fillStyle = tone(1);
+      [150, 185, 220].forEach((bx) => Y.fillRect(lx + bx, RAIL - 76 + dy, 5, 46));
+      // smokebox + chimney + dome
+      B.fillStyle = tone(1);
+      B.beginPath(); B.roundRect(lx + 236, RAIL - 78 + dy, 22, 50, 6); B.fill();
+      B.beginPath(); B.moveTo(lx + 212, RAIL - 76 + dy); B.lineTo(lx + 214, RAIL - 104 + dy); B.lineTo(lx + 206, RAIL - 112 + dy);
+      B.lineTo(lx + 234, RAIL - 112 + dy); B.lineTo(lx + 226, RAIL - 104 + dy); B.lineTo(lx + 228, RAIL - 76 + dy); B.fill();
+      P.fillStyle = tone(1); P.beginPath(); P.ellipse(lx + 168, RAIL - 76 + dy, 14, 12, 0, Math.PI, 0); P.fill();
+      Y.fillStyle = tone(1); Y.beginPath(); Y.ellipse(lx + 168, RAIL - 76 + dy, 14, 12, 0, Math.PI, 0); Y.fill();
+      // cowcatcher
+      B.fillStyle = tone(1);
+      B.beginPath(); B.moveTo(lx + 244, RAIL - 30); B.lineTo(lx + 272, RAIL - 2); B.lineTo(lx + 240, RAIL - 2); B.fill();
+      // headlamp + beam
+      Y.fillStyle = tone(1); blob(Y, lx + 262, RAIL - 66 + dy, 7, { seed: 44 }); Y.fill();
+      B.fillStyle = '#fff'; blob(B, lx + 262, RAIL - 66 + dy, 7, { seed: 44 }); B.fill();
+      if (night > 0.02) {
+        const g = Y.createLinearGradient(lx + 262, 0, X1, 0);
+        g.addColorStop(0, tone(0.7 * night)); g.addColorStop(1, tone(0.1 * night));
+        Y.fillStyle = g;
+        Y.beginPath(); Y.moveTo(lx + 262, RAIL - 70 + dy); Y.lineTo(X1, RAIL - 100); Y.lineTo(X1, RAIL + 20); Y.lineTo(lx + 262, RAIL - 62 + dy); Y.fill();
+      }
+      // wheels + connecting rod
+      wheel(lx + 14, RAIL - 11, 11, 4); wheel(lx + 46, RAIL - 11, 11, 4);
+      const a = wheel(lx + 140, RAIL - 22, 22, 8);
+      wheel(lx + 192, RAIL - 22, 22, 8);
+      wheel(lx + 236, RAIL - 12, 12, 5);
+      const cx = Math.cos(a) * 12, cy = Math.sin(a) * 12;
+      Y.strokeStyle = tone(1); Y.lineWidth = 5; Y.lineCap = 'round';
+      Y.beginPath(); Y.moveTo(lx + 140 + cx, RAIL - 22 + cy); Y.lineTo(lx + 192 + cx, RAIL - 22 + cy); Y.stroke();
+      P.strokeStyle = tone(1); P.lineWidth = 3;
+      P.beginPath(); P.moveTo(lx + 192 + cx, RAIL - 22 + cy); P.lineTo(lx + 240, RAIL - 32 + dy); P.stroke();
+    }
+
+    // ---- steam ---------------------------------------------------------------------------
+    {
+      const dt = 0.16, life = 2.6;
+      const cx0 = 660 + 220, cy0 = RAIL - 114;
+      for (let k = Math.floor((t - life) / dt); k <= Math.floor(t / dt); k++) {
+        const age = t - k * dt;
+        if (age < 0 || age > life) continue;
+        const u = age / life;
+        const id = ((k % 300) + 300) % 300;             // LOOP / dt = 300 puffs per loop
+        const x = cx0 - age * 150 - age * age * 30 + noise.noise2(id * 0.37, age) * 12;
+        const y = cy0 - age * 48 - Math.sqrt(age) * 22 + noise.noise2(age * 1.3, id * 0.51) * 10;
+        const r = 9 + age * 22;
+        const d = Math.pow(1 - u, 1.2);
+        P.fillStyle = tone(0.35 * d); blob(P, x + 3, y + r * 0.25, r, { seed: id, wobble: 0.14 }); P.fill();
+        ALL.forEach((c) => { c.fillStyle = `rgba(255,255,255,${d})`; blob(c, x - 1, y - 1, r * 0.94, { seed: id, wobble: 0.14 }); c.fill(); });
+      }
+    }
+
+    // ---- foreground rush -------------------------------------------------------------------
+    {
+      const v = 1000, f = profile(v, t, 60, 6, 2);
+      const draw = (c) => ridge(c, (x) => Y1 - 14 - 10 * f(x), { x0: X0, x1: X1, bottom: Y1 + 2 });
+      shape([[B, nB(0.75)], [Y, nY(0.5)]], draw);
+      scatter(v, 700, t, 200, (x, i) => {
+        const r = 16 + hash(i, 21) * 22;
+        [[B, nB(0.88)], [Y, nY(0.45)]].forEach(([c, d]) => {
+          c.fillStyle = tone(d); c.beginPath(); c.ellipse(x, Y1 + 6, r * 2.6, r, 0, 0, TAU); c.fill();
+        });
+        if (hash(i, 22) > 0.4) { P.fillStyle = tone(1); for (let j = 0; j < 5; j++) { blob(P, x - r * 1.6 + j * r * 0.8, Y1 - r * 0.5 + hash(i + j, 23) * 10, 3.5, { seed: j }); P.fill(); } }
+      });
+    }
+
+    ALL.forEach((c) => c.restore());
+
+    // ---- caption (printed in the margin) -------------------------------------------------------
+    const cy = Y1 + 34;
+    B.fillStyle = tone(1);
+    B.font = '800 22px "Helvetica Neue", Helvetica, Arial, sans-serif';
+    B.letterSpacing = '5px';
+    B.fillText('NIGHT & DAY EXPRESS', X0, cy);
+    P.fillStyle = tone(1);
+    P.font = '500 12px "Helvetica Neue", Helvetica, Arial, sans-serif';
+    P.letterSpacing = '3px';
+    P.fillText('A JOURNEY IN THREE INKS — BLUE / FLUO PINK / YELLOW', X0, cy + 20);
+    const mins = Math.floor(((p * 24 + 6) % 24) * 60);
+    const clock = String(Math.floor(mins / 60)).padStart(2, '0') + ':' + String(mins % 60).padStart(2, '0');
+    P.font = '800 30px "Helvetica Neue", Helvetica, Arial, sans-serif';
+    P.letterSpacing = '2px';
+    P.textAlign = 'right';
+    P.fillText(clock, X1 - 70, cy + 12);
+    P.textAlign = 'left';
+    [[Y, 0], [P, 1], [B, 2]].forEach(([c, i]) => { c.fillStyle = tone(1); c.beginPath(); c.arc(X1 - 46 + i * 18, cy + 1, 8, 0, TAU); c.fill(); });
+  };
+}, {
+  title: 'night-and-day-express',
+  width: 960,
+  height: 600,
+  inks: ['blue', 'fluorescentPink', 'yellow'],
+  paper: 'cream',
+  fps: 24,
+  boil: 8,
+  misregister: 3,
+  loop: LOOP,
+  seed: 4,
+});
+</script>
+</body>
+</html>
